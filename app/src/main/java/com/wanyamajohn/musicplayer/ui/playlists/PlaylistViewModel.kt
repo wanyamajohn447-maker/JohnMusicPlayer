@@ -98,18 +98,24 @@ class PlaylistViewModel @Inject constructor(
 
     fun importFrom(uri: Uri) {
         viewModelScope.launch {
-            val text = withContext(Dispatchers.IO) {
-                runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
-            }
-            if (text == null) { _message.value = "Could not read that file."; return@launch }
-            val entries = M3u.parse(text)
-            if (entries.isEmpty()) { _message.value = "No songs found in that playlist file."; return@launch }
             val songs = media.songs.value
-            val matched = entries.mapNotNull { e -> songs.firstOrNull { it.displayName.equals(M3u.baseName(e.path), ignoreCase = true) } }
-            val name = (queryDisplayName(context, uri) ?: "Imported playlist").substringBeforeLast('.')
+            val result = withContext(Dispatchers.IO) {
+                val text = runCatching {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }.getOrNull() ?: return@withContext null
+                val entries = M3u.parse(text)
+                val byName = HashMap<String, Long>(songs.size * 2)
+                for (s in songs) byName.putIfAbsent(s.displayName.lowercase(), s.id)
+                val matchedIds = entries.mapNotNull { byName[M3u.baseName(it.path).lowercase()] }
+                val name = (queryDisplayName(context, uri) ?: "Imported playlist").substringBeforeLast('.')
+                Triple(name, entries.size, matchedIds)
+            }
+            if (result == null) { _message.value = "Could not read that file."; return@launch }
+            val (name, total, matchedIds) = result
+            if (total == 0) { _message.value = "No songs found in that playlist file."; return@launch }
             val id = userData.createPlaylist(name)
-            userData.addToPlaylist(id, matched.map { it.id })
-            _message.value = "Imported ${matched.size} of ${entries.size} songs" +
+            userData.addToPlaylist(id, matchedIds)
+            _message.value = "Imported ${matchedIds.size} of $total songs" +
                 if (songs.isEmpty()) " (open the Library tab first so songs can be matched)." else "."
         }
     }
